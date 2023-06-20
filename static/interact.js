@@ -1,5 +1,8 @@
 "use strict";
 
+const document_id = 'test';
+let lines = [];
+
 function get_textbox(e) {
     if (e.target.classList.contains('textbox')) {
         return e.target;
@@ -18,49 +21,65 @@ function get_selected_textbox() {
     return result;
 }
 
-function redisplay_textbox(textbox) {
+async function redisplay_textbox(textbox) {
     const textg = textbox.querySelector('.textg');
     textg.innerHTML = '';
-    const textelem = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    const pos = parseInt(textbox.dataset.pos);
+    const line_id = parseInt(textbox.dataset.line_id);
+    const pos = lines[line_id].pos;
 
-    textelem.setAttribute('x', '0');
-    textelem.setAttribute('y', '20');
-    textelem.style.fontVariantLigatures = 'none';
-    textelem.textContent = textbox.dataset.text;
-    textg.appendChild(textelem);
+    let x = 0;
+    let y = 20;
+    let cursor_x = 0;
 
-    // Force a layout update
-    window.requestAnimationFrame(() => {
-        const selg = textbox.querySelector('.selg');
-        selg.innerHTML = '';
-        const selrect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        let x = 0;
-        let y = 0;
-        if (pos === 0) {
-            x = 0;
-            y = 20;
-        } else {
-            const position = textelem.getEndPositionOfChar(pos - 1);
-            x = position.x;
-            y = position.y;
+    for (const breakdown of lines[line_id].breakdown) {
+        const textelem = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        textelem.setAttribute('x', x);
+        textelem.setAttribute('y', y);
+        textelem.setAttribute('fill', {
+            'unknown': 'grey',
+            'keyword': 'green',
+            'string': 'black',
+        }[breakdown.type])
+        textelem.style.fontVariantLigatures = 'none';
+        textelem.style.whiteSpace = 'pre';
+        textelem.textContent = breakdown.text;
+        textg.appendChild(textelem);
+
+        // Force a layout update
+        await new Promise(resolve => window.requestAnimationFrame(resolve));
+
+        if (pos >= breakdown.position && pos <= breakdown.position + breakdown.text.length) {
+            if (pos === breakdown.position) {
+                cursor_x = x;
+            } else {
+                cursor_x = textelem.getEndPositionOfChar(pos - breakdown.position - 1).x;
+            }
         }
-        selrect.setAttribute('x', x);
-        selrect.setAttribute('y', y - 20);
-        selrect.setAttribute('width', '2');
-        selrect.setAttribute('height', '20');
-        selrect.setAttribute('fill', 'grey');
-        selg.appendChild(selrect);
-    });
+
+        if (breakdown.text !== '') {
+            x = textelem.getEndPositionOfChar(breakdown.text.length - 1).x;
+        }
+    }
+
+    const selg = textbox.querySelector('.selg');
+    selg.innerHTML = '';
+    const selrect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    selrect.setAttribute('x', cursor_x);
+    selrect.setAttribute('y', y - 20);
+    selrect.setAttribute('width', '2');
+    selrect.setAttribute('height', '20');
+    selrect.setAttribute('fill', 'grey');
+    selg.appendChild(selrect);
 }
 
-function document_keydown(e) {
+async function document_keydown(e) {
     const textbox = get_selected_textbox();
     if (textbox === undefined) {
         return;
     }
-    let text = textbox.dataset.text;
-    let pos = parseInt(textbox.dataset.pos);
+    let line_id = parseInt(textbox.dataset.line_id);
+    let text = lines[line_id].text;
+    let pos = lines[line_id].pos;
 
     if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         text = text.slice(0, pos) + e.key + text.slice(pos);
@@ -82,10 +101,30 @@ function document_keydown(e) {
         if (pos < text.length) {
             pos += 1;
         }
+    } else {
+        return;
     }
-    textbox.dataset.text = text;
-    textbox.dataset.pos = pos;
-    redisplay_textbox(textbox);
+    lines[line_id].text = text;
+    lines[line_id].pos = pos;
+
+    await update_document_from_server();
+    await redisplay_textbox(textbox);
+}
+
+async function update_document_from_server() {
+    const response = await fetch(`/api/document/${document_id}`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({lines})
+    });
+    if (!response.ok) {
+        console.log('Error saving document');
+        return;
+    }
+    const result = await response.json();
+    lines = result.lines;
 }
 
 function textbox_mousedown(e) {
@@ -101,11 +140,15 @@ function textbox_mousedown(e) {
     textbox.classList.add('editing');
 }
 
-function create_textbox(selected) {
+async function create_textbox(selected) {
+    const line_id = lines.length;
     const textbox = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     textbox.classList.add('textbox');
-    textbox.dataset.text = '';
-    textbox.dataset.pos = '0';
+    textbox.dataset.line_id = line_id;
+    lines.push({
+        text: '',
+        pos: 0,
+    });
     textbox.setAttribute('width', '500');
     textbox.setAttribute('height', '100');
 
@@ -127,14 +170,14 @@ function create_textbox(selected) {
         textbox.classList.add('editing');
     }
 
-    redisplay_textbox(textbox);
+    document.body.appendChild(textbox);
 
-    return textbox;
+    await update_document_from_server();
+    await redisplay_textbox(textbox);
 }
 
-function load_stuff() {
-    const textbox = create_textbox(true);
-    document.body.appendChild(textbox);
+async function load_stuff() {
+    const textbox = await create_textbox(true);
     document.onkeydown = document_keydown;
 }
 
