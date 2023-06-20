@@ -1,0 +1,7 @@
+.textbox {
+    border: solid black 1px;
+}
+
+.textbox.editing {
+    border: solid red 1px;
+}
