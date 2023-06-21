@@ -1,4 +1,3 @@
-import transformer_lens
 import torch
 import numpy as np
 import random
@@ -18,84 +17,45 @@ def ask(prompt:str) -> int:
             return 1
         elif s == 'n':
             return 0
+        elif s == 'q':
+            return None
 
 def main():
-    torch.set_grad_enabled(False)
-    device = 'cpu'
-    print(f'Using device: {device}')
-    model = transformer_lens.HookedTransformer.from_pretrained('gpt2-small', device=device)
+    stuff = torch.load('corpus_toks_filtered.pt')
+    X = stuff['X']
+    prompts = stuff['prompts']
 
-    stuff = torch.load('corpus_toks.pt')
-    corpus_toks = stuff['corpus_toks']
-    results = stuff['results']
-
-    print(f'{len(corpus_toks)} sentences')
-
-    doc_ixs0 = []
-    tok_ixs0 = []
-    for i, ts in enumerate(corpus_toks):
-        for j in range(len(ts)):
-            doc_ixs0.append(i)
-            tok_ixs0.append(j)
-
-    want_keep = 10000
-    d_model = model.cfg.d_model
-    i = 0
-    X = np.zeros((want_keep, d_model))
-    doc_ixs = []
-    tok_ixs = []
-    random.seed(42)
-    printed = 0
-    for ix in random.sample(range(len(doc_ixs0)), len(doc_ixs0)):
-        new_res = results[doc_ixs0[ix]][tok_ixs0[ix]]
-        if i > 0:
-            distances = np.linalg.norm(X[:i,:] - new_res.reshape((1, d_model)), axis=1)
-            distance = distances.min()
-            if distance < 40:
-                if printed < 0:
-                    print(get_prompt(model, corpus_toks[doc_ixs0[ix]], tok_ixs0[ix]))
-                    ix2 = np.argmin(distances)
-                    print(get_prompt(model, corpus_toks[doc_ixs[ix2]], tok_ixs[ix2]))
-                    print()
-                    printed += 1
-                continue
-
-        X[i,:] = new_res
-        doc_ixs.append(doc_ixs0[ix])
-        tok_ixs.append(tok_ixs0[ix])
-        i += 1
-        if i >= want_keep:
-            break
-
-    n_tokens = len(doc_ixs)
-    doc_ixs = np.array(doc_ixs, dtype=np.int32)
-    tok_ixs = np.array(tok_ixs, dtype=np.int32)
-    print(f"Wanted {want_keep}. Got {n_tokens}.")
-    X = X[:n_tokens,:]
-
-    print(f'd_model = {d_model}')
+    n_tokens = len(prompts)
+    print(f'{n_tokens} prompts')
 
     # Active learning
     y = np.full(shape=(n_tokens,), fill_value=MISSING_LABEL)
     clf = SklearnClassifier(LogisticRegression(), classes=[0,1])
     qs = UncertaintySampling(method='entropy', random_state=42)
-    n_cycles = 20
 
     clf.fit(X, y)
-    for c in range(n_cycles):
+    while True:
         query_idx = qs.query(X=X, y=y, clf=clf, batch_size=1)[0]
-        prompt = get_prompt(model, corpus_toks[doc_ixs[query_idx]], tok_ixs[query_idx])
-        y[query_idx] = ask(prompt)
+        prompt = prompts[query_idx]
+        user_value = ask(prompt)
+        if user_value == None:
+            break
+        y[query_idx] = user_value
         clf.fit(X, y)
 
     print('Examples')
-    print('-------')
+    print('--------')
     yguess = clf.predict_proba(X)[:,1]
     ix = np.argsort(yguess)
     for j in range(0, len(ix), 100):
         i = ix[j]
-        print(f'{yguess[i]:.3f} {get_prompt(model, corpus_toks[doc_ixs[i]], tok_ixs[i])}')
-    
+        print(f'{yguess[i]:.3f} {prompts[i]}')
+    coeffs = clf.coef_[0]
+    print('Largest Coefficients')
+    print('--------------------')
+    ix = np.argsort(np.abs(coeffs))
+    for i in ix[-20:]:
+        print(f'{i}: {coeffs[i]:.3f}')
 
 if __name__ == '__main__':
     main()
