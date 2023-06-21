@@ -1,1 +1,4 @@
 flask
+nltk
+scikit-activeml
+git+https://github.com/neelnanda-io/TransformerLens
