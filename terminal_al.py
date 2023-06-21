@@ -1,6 +1,7 @@
 import transformer_lens
 import torch
 import numpy as np
+import random
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from skactiveml.classifier import SklearnClassifier
@@ -30,30 +31,49 @@ def main():
 
     print(f'{len(corpus_toks)} sentences')
 
-    doc_ixs = []
-    tok_ixs = []
+    doc_ixs0 = []
+    tok_ixs0 = []
     for i, ts in enumerate(corpus_toks):
         for j in range(len(ts)):
-            doc_ixs.append(i)
-            tok_ixs.append(j)
+            doc_ixs0.append(i)
+            tok_ixs0.append(j)
+
+    want_keep = 10000
+    d_model = model.cfg.d_model
+    i = 0
+    X = np.zeros((want_keep, d_model))
+    doc_ixs = []
+    tok_ixs = []
+    random.seed(42)
+    printed = 0
+    for ix in random.sample(range(len(doc_ixs0)), len(doc_ixs0)):
+        new_res = results[doc_ixs0[ix]][tok_ixs0[ix]]
+        if i > 0:
+            distances = np.linalg.norm(X[:i,:] - new_res.reshape((1, d_model)), axis=1)
+            distance = distances.min()
+            if distance < 40:
+                if printed < 0:
+                    print(get_prompt(model, corpus_toks[doc_ixs0[ix]], tok_ixs0[ix]))
+                    ix2 = np.argmin(distances)
+                    print(get_prompt(model, corpus_toks[doc_ixs[ix2]], tok_ixs[ix2]))
+                    print()
+                    printed += 1
+                continue
+
+        X[i,:] = new_res
+        doc_ixs.append(doc_ixs0[ix])
+        tok_ixs.append(tok_ixs0[ix])
+        i += 1
+        if i >= want_keep:
+            break
 
     n_tokens = len(doc_ixs)
     doc_ixs = np.array(doc_ixs, dtype=np.int32)
     tok_ixs = np.array(tok_ixs, dtype=np.int32)
-    print(f'{n_tokens} tokens')
+    print(f"Wanted {want_keep}. Got {n_tokens}.")
+    X = X[:n_tokens,:]
 
-    d_model = model.cfg.d_model
     print(f'd_model = {d_model}')
-    X = np.zeros((n_tokens, d_model), dtype=np.float32)
-    i = 0
-    for res in results:
-        j = i + res.shape[0]
-        X[i:j] = res
-        i = j
-    if i != n_tokens:
-        raise Exception(f'Expected {n_tokens} tokens but got {i}')
-
-    X = PCA(n_components=50).fit_transform(X)
 
     # Active learning
     y = np.full(shape=(n_tokens,), fill_value=MISSING_LABEL)
